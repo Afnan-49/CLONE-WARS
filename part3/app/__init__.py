@@ -3,8 +3,6 @@ from flask_restx import Api
 from flask_sqlalchemy import SQLAlchemy 
 from flask_bcrypt import Bcrypt
 
-
-
 db = SQLAlchemy()
 bcrypt = Bcrypt()
 
@@ -13,6 +11,7 @@ def create_app(config_class="config.DevelopmentConfig"):
     
     app.config.from_object(config_class)
     db.init_app(app) 
+    bcrypt.init_app(app)  # <--- ADD THIS LINE HERE
     
     from app.services.facade import HBnBFacade
     from app.api.v1.users import api as users_ns
@@ -30,9 +29,9 @@ def create_app(config_class="config.DevelopmentConfig"):
     app.config["FACADE"] = HBnBFacade()
 
     # Register Namespaces
-    api.add_namespace(users_ns, path="/users")
-    api.add_namespace(places_ns, path="/places")
-    api.add_namespace(amenities_ns, path="/amenities")
-    api.add_namespace(reviews_ns, path="/reviews")
+    api.add_namespace(users_ns, path="/api/v1/users") # Recommendation: Add /api/v1/ to match instructions
+    api.add_namespace(places_ns, path="/api/v1/places")
+    api.add_namespace(amenities_ns, path="/api/v1/amenities")
+    api.add_namespace(reviews_ns, path="/api/v1/reviews")
 
     return app
