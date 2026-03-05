@@ -1,89 +1,63 @@
 from flask_restx import Namespace, Resource, fields
-from flask import request
-from app.services.facade import facade
+from flask_jwt_extended import jwt_required  # <--- Essential for Task 2
+from flask import current_app
 
-api = Namespace("users", description="User operations")
+api = Namespace('users', description='User operations')
 
-# This model defines what the API expects when creating a user
-user_input = api.model("UserInput", {
-    "first_name": fields.String(required=True, description="User first name"),
-    "last_name": fields.String(required=True, description="User last name"),
-    "email": fields.String(required=True, description="User email"),
-    "password": fields.String(required=True, description="User password"),
+# Define the user model for input validation and output masking
+user_model = api.model('User', {
+    'id': fields.String(readOnly=True, description='The user unique identifier'),
+    'first_name': fields.String(required=True, description='First name of the user'),
+    'last_name': fields.String(required=True, description='Last name of the user'),
+    'email': fields.String(required=True, description='Email of the user'),
+    'is_admin': fields.Boolean(default=False, description='Whether the user is an admin'),
+    'created_at': fields.String(readOnly=True, description='Creation timestamp'),
+    'updated_at': fields.String(readOnly=True, description='Last update timestamp')
 })
 
-# This model defines what the API expects when updating a user
-user_update = api.model("UserUpdate", {
-    "first_name": fields.String(required=False),
-    "last_name": fields.String(required=False),
-    "email": fields.String(required=False),
-    "password": fields.String(required=False),
-    "is_admin": fields.Boolean(required=False),
-})
-
-# IMPORTANT: This model defines what is sent BACK to the user.
-# Note that "password" is NOT included here for security.
-user_output = api.model("User", {
-    "id": fields.String(readOnly=True),
-    "first_name": fields.String,
-    "last_name": fields.String,
-    "email": fields.String,
-    "is_admin": fields.Boolean,
-    "created_at": fields.String,
-    "updated_at": fields.String,
-})
-
-def serialize_user(u):
-    """Converts a User object into a dictionary for JSON responses, excluding sensitive data."""
-    return {
-        "id": u.id,
-        "first_name": u.first_name,
-        "last_name": u.last_name,
-        "email": u.email,
-        "is_admin": u.is_admin,
-        "created_at": u.created_at.isoformat() if u.created_at else None,
-        "updated_at": u.updated_at.isoformat() if u.updated_at else None,
-    }
-
-@api.route("/")
+@api.route('/')
 class UserList(Resource):
-
-    @api.marshal_list_with(user_output)
+    @api.doc('list_users')
+    @api.marshal_list_with(user_model)
+    @jwt_required()  # <--- Only users with a valid token can access this now
     def get(self):
-        """Fetch all users (Passwords are automatically excluded by user_output)"""
-        users = facade.user_repo.get_all()
-        return [serialize_user(u) for u in users], 200
+        """Retrieve a list of all users (Protected)"""
+        facade = current_app.config['FACADE']
+        return facade.list_users()
 
-    @api.expect(user_input, validate=True)
-    @api.marshal_with(user_output, code=201)
+    @api.expect(user_model, validate=True)
+    @api.marshal_with(user_model, code=201)
     def post(self):
-        """Create a new user with a hashed password"""
+        """Register a new user"""
+        facade = current_app.config['FACADE']
+        user_data = api.payload
         try:
-            # The facade.create_user method should handle the hashing
-            user = facade.create_user(request.json or {})
-            return serialize_user(user), 201
+            new_user = facade.create_user(user_data)
+            return new_user, 201
         except ValueError as e:
-            api.abort(400, str(e))
+            return {'error': str(e)}, 400
 
-@api.route("/<string:user_id>")
-class UserItem(Resource):
-
-    @api.marshal_with(user_output)
+@api.route('/<user_id>')
+@api.response(404, 'User not found')
+class UserResource(Resource):
+    @api.doc('get_user')
+    @api.marshal_with(user_model)
     def get(self, user_id):
-        """Fetch a single user by ID"""
+        """Get user details by ID"""
+        facade = current_app.config['FACADE']
         user = facade.get_user(user_id)
         if not user:
             api.abort(404, "User not found")
-        return serialize_user(user), 200
+        return user
 
-    @api.expect(user_update, validate=True)
-    @api.marshal_with(user_output)
+    @api.expect(user_model, validate=True)
+    @api.marshal_with(user_model)
+    @jwt_required()  # <--- Protecting updates as well is good practice!
     def put(self, user_id):
-        """Update user details"""
-        try:
-            user = facade.update_user(user_id, request.json or {})
-            if not user:
-                api.abort(404, "User not found")
-            return serialize_user(user), 200
-        except ValueError as e:
-            api.abort(400, str(e))
+        """Update user information"""
+        facade = current_app.config['FACADE']
+        user_data = api.payload
+        updated_user = facade.update_user(user_id, user_data)
+        if not updated_user:
+            api.abort(404, "User not found")
+        return updated_user
