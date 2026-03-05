@@ -65,6 +65,9 @@ class HBnBFacade:
         user.validate()
         return self.user_repo.update(user_id, user_data)
 
+    def get_user_by_email(self, email: str) -> Optional[User]:
+        return self.user_repo.get_user_by_email(email)
+
     # ---------- Amenities ----------
     def create_amenity(self, data: Dict[str, Any]) -> Amenity:
         name = (data.get("name") or "").strip()
