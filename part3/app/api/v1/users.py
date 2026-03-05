@@ -1,41 +1,10 @@
 from flask_restx import Namespace, Resource, fields
-from flask_jwt_extended import jwt_required  # <--- Essential for Task 2
+from flask_jwt_extended import jwt_required, get_jwt_identity # <--- Added get_jwt_identity
 from flask import current_app
 
 api = Namespace('users', description='User operations')
 
-# Define the user model for input validation and output masking
-user_model = api.model('User', {
-    'id': fields.String(readOnly=True, description='The user unique identifier'),
-    'first_name': fields.String(required=True, description='First name of the user'),
-    'last_name': fields.String(required=True, description='Last name of the user'),
-    'email': fields.String(required=True, description='Email of the user'),
-    'is_admin': fields.Boolean(default=False, description='Whether the user is an admin'),
-    'created_at': fields.String(readOnly=True, description='Creation timestamp'),
-    'updated_at': fields.String(readOnly=True, description='Last update timestamp')
-})
-
-@api.route('/')
-class UserList(Resource):
-    @api.doc('list_users')
-    @api.marshal_list_with(user_model)
-    @jwt_required()  # <--- Only users with a valid token can access this now
-    def get(self):
-        """Retrieve a list of all users (Protected)"""
-        facade = current_app.config['FACADE']
-        return facade.list_users()
-
-    @api.expect(user_model, validate=True)
-    @api.marshal_with(user_model, code=201)
-    def post(self):
-        """Register a new user"""
-        facade = current_app.config['FACADE']
-        user_data = api.payload
-        try:
-            new_user = facade.create_user(user_data)
-            return new_user, 201
-        except ValueError as e:
-            return {'error': str(e)}, 400
+# ... (keep your existing user_model) ...
 
 @api.route('/<user_id>')
 @api.response(404, 'User not found')
@@ -43,7 +12,7 @@ class UserResource(Resource):
     @api.doc('get_user')
     @api.marshal_with(user_model)
     def get(self, user_id):
-        """Get user details by ID"""
+        """Get user details by ID (Public)"""
         facade = current_app.config['FACADE']
         user = facade.get_user(user_id)
         if not user:
@@ -52,11 +21,22 @@ class UserResource(Resource):
 
     @api.expect(user_model, validate=True)
     @api.marshal_with(user_model)
-    @jwt_required()  # <--- Protecting updates as well is good practice!
+    @jwt_required() # <--- Required for security
     def put(self, user_id):
-        """Update user information"""
+        """Update user information (Protected)"""
+        current_user_id = get_jwt_identity() # Get ID from the token
         facade = current_app.config['FACADE']
+        
+        # 1. Authorization Check: Is the user editing themselves?
+        if current_user_id != user_id:
+            return {'error': 'Unauthorized action'}, 403
+
         user_data = api.payload
+        
+        # 2. Field Restriction: Block email/password updates here
+        if 'email' in user_data or 'password' in user_data:
+            return {'error': 'You cannot modify email or password'}, 400
+
         updated_user = facade.update_user(user_id, user_data)
         if not updated_user:
             api.abort(404, "User not found")
