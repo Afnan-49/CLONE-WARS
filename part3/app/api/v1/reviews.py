@@ -1,98 +1,90 @@
 from flask_restx import Namespace, Resource, fields
-from flask import request
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask import current_app
 
-from app.services.facade import facade
+api = Namespace('reviews', description='Review operations')
 
-api = Namespace("reviews", description="Review operations")
-
-review_input = api.model("ReviewInput", {
-    "text": fields.String(required=True),
-    "rating": fields.Integer(required=True, description="1..5"),
-    "user_id": fields.String(required=True),
-    "place_id": fields.String(required=True),
+# Review model for input/output
+review_model = api.model('Review', {
+    'text': fields.String(required=True, description='Text of the review'),
+    'rating': fields.Integer(required=True, description='Rating (1-5)'),
+    'user_id': fields.String(readOnly=True, description='ID of the reviewer'),
+    'place_id': fields.String(required=True, description='ID of the place being reviewed')
 })
 
-review_update = api.model("ReviewUpdate", {
-    "text": fields.String(required=False),
-    "rating": fields.Integer(required=False, description="1..5"),
-})
-
-review_output = api.model("Review", {
-    "id": fields.String(readOnly=True),
-    "text": fields.String,
-    "rating": fields.Integer,
-    "user_id": fields.String,
-    "place_id": fields.String,
-    "created_at": fields.String,
-    "updated_at": fields.String,
-})
-
-def serialize_review(r):
-    
-    return {
-        "id": r.id,
-        "text": r.text,
-        "rating": r.rating,
-        "user_id": r.user_id,
-        "place_id": r.place_id,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
-        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-
-    }
-
-@api.route("/")
+@api.route('/')
 class ReviewList(Resource):
-
-    @api.marshal_list_with(review_output)
-    def get(self):
-        reviews = facade.list_reviews()
-        return [serialize_review(r) for r in reviews], 200
-
-    @api.expect(review_input, validate=True)
-    @api.marshal_with(review_output, code=201)
+    @api.expect(review_model, validate=True)
+    @api.marshal_with(review_model, code=201)
+    @jwt_required()
     def post(self):
-        try:
-            review = facade.create_review(request.json or {})
-            return serialize_review(review), 201
-        except ValueError as e:
-            api.abort(400, str(e))
+        """Create a new review (Protected)"""
+        current_user_id = get_jwt_identity()
+        facade = current_app.config['FACADE']
+        review_data = api.payload
 
-@api.route("/<string:review_id>")
-class ReviewItem(Resource):
+        # 1. Fetch the place to check ownership
+        place = facade.get_place(review_data['place_id'])
+        if not place:
+            api.abort(404, "Place not found")
 
-    @api.marshal_with(review_output)
+        # 2. Rule: You cannot review your own place
+        if place.owner_id == current_user_id:
+            return {'error': 'You cannot review your own place'}, 400
+
+        # 3. Rule: No duplicate reviews from the same user
+        existing_reviews = facade.get_reviews_by_place(review_data['place_id'])
+        for r in existing_reviews:
+            if r.user_id == current_user_id:
+                return {'error': 'You have already reviewed this place'}, 400
+
+        # Create the review
+        review_data['user_id'] = current_user_id
+        new_review = facade.create_review(review_data)
+        return new_review, 201
+
+@api.route('/<review_id>')
+class ReviewResource(Resource):
+    @api.marshal_with(review_model)
     def get(self, review_id):
+        """Get review details by ID (Public)"""
+        facade = current_app.config['FACADE']
         review = facade.get_review(review_id)
         if not review:
             api.abort(404, "Review not found")
-        return serialize_review(review), 200
+        return review
 
-    @api.expect(review_update, validate=True)
-    @api.marshal_with(review_output)
+    @api.expect(review_model, validate=True)
+    @jwt_required()
     def put(self, review_id):
-        try:
-            review = facade.update_review(review_id, request.json or {})
-            if not review:
-                api.abort(404, "Review not found")
-            return serialize_review(review), 200
-        except ValueError as e:
-            api.abort(400, str(e))
+        """Update a review (Protected - Owner only)"""
+        current_user_id = get_jwt_identity()
+        facade = current_app.config['FACADE']
+        review = facade.get_review(review_id)
 
-    def delete(self, review_id):
-        deleted = facade.delete_review(review_id)
-        if not deleted:
+        if not review:
             api.abort(404, "Review not found")
-        return {"message": "Review deleted"}, 200
 
+        # 4. Authorization Check: Only the creator can edit
+        if review.user_id != current_user_id:
+            return {'error': 'Unauthorized action'}, 403
 
-#  list reviews for a specific place
-@api.route("/places/<string:place_id>/reviews")
-class PlaceReviews(Resource):
+        updated_review = facade.update_review(review_id, api.payload)
+        return updated_review, 200
 
-    @api.marshal_list_with(review_output)
-    def get(self, place_id):
-        try:
-            reviews = facade.list_reviews_by_place(place_id)
-            return [serialize_review(r) for r in reviews], 200
-        except ValueError as e:
-            api.abort(404, str(e))
+    @jwt_required()
+    def delete(self, review_id):
+        """Delete a review (Protected - Owner only)"""
+        current_user_id = get_jwt_identity()
+        facade = current_app.config['FACADE']
+        review = facade.get_review(review_id)
+
+        if not review:
+            api.abort(404, "Review not found")
+
+        # 5. Authorization Check: Only the creator can delete
+        if review.user_id != current_user_id:
+            return {'error': 'Unauthorized action'}, 403
+
+        facade.delete_review(review_id)
+        return {'message': 'Review deleted successfully'}, 200
