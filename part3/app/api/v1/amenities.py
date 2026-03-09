@@ -1,64 +1,48 @@
+from flask import current_app
 from flask_restx import Namespace, Resource, fields
-from flask import request
+from flask_jwt_extended import jwt_required, get_jwt
 
-from app.services.facade import facade  # facade instance (Singleton)
+api = Namespace('amenities', description='Amenity operations')
 
-api = Namespace("amenities", description="Amenity operations")
-
-amenity_input = api.model("AmenityInput", {
-    "name": fields.String(required=True),
+amenity_model = api.model('Amenity', {
+    'name': fields.String(required=True, description='Name of the amenity')
 })
 
-amenity_output = api.model("Amenity", {
-    "id": fields.String(readOnly=True),
-    "name": fields.String,
-    "created_at": fields.String,
-    "updated_at": fields.String,
-
-})
-
-def serialize_amenity(a):
-    return {
-        "id": a.id,
-        "name": a.name,
-        "created_at": a.created_at.isoformat(),
-        "updated_at": a.updated_at.isoformat(),        
-    }
-
-@api.route("/")
+@api.route('/')
 class AmenityList(Resource):
-
-    @api.marshal_list_with(amenity_output)
     def get(self):
-        amenities = facade.list_amenities()
-        return [serialize_amenity(a) for a in amenities], 200
+        """Retrieve all amenities (Public)"""
+        return current_app.config['FACADE'].get_all_amenities(), 200
 
-    @api.expect(amenity_input, validate=True)
-    @api.marshal_with(amenity_output, code=201)
+    @jwt_required()
+    @api.expect(amenity_model)
     def post(self):
-        try:
-            amenity = facade.create_amenity(request.json or {})
-            return serialize_amenity(amenity), 201
-        except ValueError as e:
-            api.abort(400, str(e))
+        """Add a new amenity (Admin Only)"""
+        token_claims = get_jwt()
+        if not token_claims.get('is_admin'):
+            return {'error': 'Admin privileges required'}, 403
 
-@api.route("/<string:amenity_id>")
-class AmenityItem(Resource):
+        new_amenity = current_app.config['FACADE'].create_amenity(api.payload)
+        return new_amenity, 201
 
-    @api.marshal_with(amenity_output)
+@api.route('/<amenity_id>')
+class AmenityResource(Resource):
     def get(self, amenity_id):
-        amenity = facade.get_amenity(amenity_id)
+        """Get amenity details (Public)"""
+        amenity = current_app.config['FACADE'].get_amenity(amenity_id)
         if not amenity:
-            api.abort(404, "Amenity not found")
-        return serialize_amenity(amenity), 200
+            return {'error': 'Amenity not found'}, 404
+        return amenity, 200
 
-    @api.expect(amenity_input, validate=True)
-    @api.marshal_with(amenity_output)
+    @jwt_required()
+    @api.expect(amenity_model)
     def put(self, amenity_id):
-        try:
-            amenity = facade.update_amenity(amenity_id, request.json or {})
-            if not amenity:
-                api.abort(404, "Amenity not found")
-            return serialize_amenity(amenity), 200
-        except ValueError as e:
-            api.abort(400, str(e))
+        """Update an amenity (Admin Only)"""
+        token_claims = get_jwt()
+        if not token_claims.get('is_admin'):
+            return {'error': 'Admin privileges required'}, 403
+
+        updated_amenity = current_app.config['FACADE'].update_amenity(amenity_id, api.payload)
+        if not updated_amenity:
+            return {'error': 'Amenity not found'}, 404
+        return updated_amenity, 200
